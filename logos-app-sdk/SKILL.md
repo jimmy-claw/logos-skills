@@ -4,7 +4,7 @@ description: >-
   Turn a Logos/Loam app's mobile engine (the React Native `mobile/src/lib` folder: fold, store,
   sync, crypto, identity) into a reusable SDK repo that other apps mount as a git submodule — with
   history kept, the app's own imports unchanged, and the desktop core module as the SDK's other
-  half. Reach for it when a second app wants to read and write the first app's data (Frequencies on
+  half. Reach for it when a second app wants to read and write the first app's data (Freequencies on
   Scala, a forms app feeding a calendar, contacts linked from another app), instead of copying files.
 ---
 
@@ -28,7 +28,7 @@ of that contract.
 - Hard-coded app identity: anything the lib sends to Loam as *this app* (the app id it registers
   with the shared node, a storage prefix, a signing domain) must become a setter, or every consumer
   appears to Loam as the original app. Scala: `export function setAppId(id)` in `scala-sync.ts`,
-  re-exported from the API file; Frequencies calls `setAppId("frequencies")` before any transport call.
+  re-exported from the API file; Freequencies calls `setAppId("freequencies")` before any transport call.
 - Commit the moves in the app first; the split takes what is committed.
 
 ## Recipe
