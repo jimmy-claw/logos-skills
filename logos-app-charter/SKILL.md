@@ -210,6 +210,8 @@ This is the **canonical index** of the skill set: every skill is listed here, an
 - **"syncs nothing / receives partially" debugging:** `logos-distributed-debugging`.
 - **A second app reads/writes the first app's data (the engine as an SDK submodule):** `logos-app-sdk`.
 - **Reviewing / UX-testing someone else's app (findings, probes, GUI test, report):** `logos-app-review`.
+- **Reviewing or building a LEZ zkVM program (RISC Zero guest, SPEL, PDAs, ChainedCall, ImageID):** `logos-lez-program`.
+- **Reviewing a prize/RFP spec itself (verifiability, numbering, template):** `logos-spec-review`.
 - **First-time adoption of the Loam shared node in an RN app:** `loam-integrate-app`;
   **an app already on Loam moving to a newer loam-transport:** `loam-update-app`.
 - **Hardware/per-person identity:** `loam-keycard`.
