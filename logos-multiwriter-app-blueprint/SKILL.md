@@ -12,6 +12,9 @@ Stand up a NEW multi-writer, offline-convergent Logos app: a **Basecamp core+vie
 
 ## Sibling skills — what each covers, when to load
 
+The skills on the build path, in the order you meet them. The full index (review, SDK sharing,
+Loam adoption, Keycard, …) is `logos-app-charter` → *Which sibling skill for which layer*.
+
 | Load this | For | Load it when |
 |---|---|---|
 | **logos-multiwriter-sync** | The data model: event log + fold, HLC ordering, commutative deltas, union merge, roles/admission. The *what to send*. | First. Before any transport. Designing the event schema, delta ops, tenant model. |

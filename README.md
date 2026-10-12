@@ -28,6 +28,15 @@ They are **generic playbooks** (any domain: shared calendars, activity trackers,
 | **loam-update-app** | Move a Loam mobile app onto a newer `loam-transport` SDK: bump the submodule, rebuild the release APK, publish — encoding the build traps (`expo prebuild --clean` wiping `local.properties`, the shim entry-file import, submodule realign). |
 | **logos-app-sdk** | **Share one app's data with another app.** Move the mobile engine (`mobile/src/lib`) into its own SDK repo with history (`git subtree split`), mount it back at the same path as a submodule, `peerDependencies`, an app-id setter for Loam, SDK-first changes with parity tests in the app. Desktop consumers call the core module instead. |
 
+## Conventions
+
+- **One index.** The full list of skills is `logos-app-charter` → *Which sibling skill for which layer*
+  (it is installed with the skills; this README is not). `scripts/check-index.sh` fails when a skill
+  directory is missing from that index or from the table above, and prints each skill's last change.
+- **Date what moves.** A claim tied to a version or a migration in flight (delivery fork vs v0.3.0,
+  storage 2.x vs 3.0, Basecamp 0.2 vs 0.3) carries the date it was true: *(as of YYYY-MM-DD)*. A dated
+  claim is a prompt to re-check, not a guarantee.
+
 ## Install
 
 Claude Code loads skills from `~/.claude/skills/`. Clone and copy (or symlink) the skill directories:

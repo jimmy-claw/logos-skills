@@ -1,6 +1,7 @@
 ---
 name: loam-update-app
 description: >-
+  For an app ALREADY on Loam (first-time adoption of the shared node is loam-integrate-app).
   Update a Loam mobile app (kym, qaku, perun, scala, or a new consumer) to the latest
   loam-transport SDK — bump the git submodule, optionally wire the shared-node status UI,
   rebuild the release APK, and publish to F-Droid. Encodes the build gotchas that bite every

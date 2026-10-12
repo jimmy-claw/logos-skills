@@ -106,6 +106,9 @@ tracker, and Loam — the shared transport they all ride on.
 
 ## 12. The skills repo as the onboarding kit
 
+- The full list of skills lives in one place: `logos-app-charter` → *Which sibling skill for which layer*
+  (and the README table); `scripts/check-index.sh` fails when a skill is missing from either.
+
 - Every rule here was paid for with a real bug; each skill footnotes the evidence.
 - A new app or a new agent starts from the charter and the blueprint and loads the layer skill it
   needs.

@@ -44,6 +44,8 @@ a session id; `storageUploadDone{sessionId, cid}` arrives later. Download
 the local store), `downloadManifest`, `manifests()`, `remove`, `connect(peerId, addrs)`, `spr()`
 (this node's signed peer record, shareable as a bootstrap address), `debug()`.[^api]
 
+*API differences as of 2026-10-04 (storage_module 2.1.3 → 3.0.0):*
+
 | | 2.1.x | 3.0 (Basecamp 0.3) |
 |---|---|---|
 | upload/download/fetch args | as above without the bracketed flags | + `advertise` / `isPrivate` booleans (pass `advertise=true`, `isPrivate=false` for shared content) |
@@ -65,7 +67,7 @@ Rules that follow:
 
 ## Basecamp 0.3: the host owns the node
 
-Basecamp 0.3 and `logosctl` bundle storage_module 3.0 and initialise it from
+As of 2026-10-04, Basecamp 0.3 and `logosctl` bundle storage_module 3.0 and initialise it from
 `$HOME/.logos_storage/config.json` (defaults: the public `logos.test` network). Your module's
 `init()` returns false. **Adopt the host's node**: on refusal, mark it host-owned, call `start()`
 (harmless if running), and never stop, restart or reconfigure it — other modules share it. To set a

@@ -192,6 +192,9 @@ before saying "fixed" or "works". Push to the remote as soon as a change is conf
 working — don't leave confirmed commits local.
 
 ## Which sibling skill for which layer
+This is the **canonical index** of the skill set: every skill is listed here, and
+`scripts/check-index.sh` fails if one is missing (other tables, like the blueprint's, are subsets).
+- **The house rules (this skill):** `logos-app-charter`.
 - **Kickoff / scoping / "which layer is missing":** `logos-multiwriter-app-blueprint`.
 - **The CRDT/fold/HLC/envelope/hub mechanics:** `logos-multiwriter-sync`.
 - **SDS Reliable Channels (channelCreate/Send, the silent-failure gates):** `logos-reliable-channels`.
@@ -205,7 +208,10 @@ working — don't leave confirmed commits local.
 - **RLN message budget:** `logos-rln-budget`.
 - **macOS / Linux ARM64 packages (CI build + merge):** `logos-multiplatform-modules`.
 - **"syncs nothing / receives partially" debugging:** `logos-distributed-debugging`.
-- **Adopt the shared node / bump loam-transport:** `loam-integrate-app`, `loam-update-app`.
+- **A second app reads/writes the first app's data (the engine as an SDK submodule):** `logos-app-sdk`.
+- **Reviewing / UX-testing someone else's app (findings, probes, GUI test, report):** `logos-app-review`.
+- **First-time adoption of the Loam shared node in an RN app:** `loam-integrate-app`;
+  **an app already on Loam moving to a newer loam-transport:** `loam-update-app`.
 - **Hardware/per-person identity:** `loam-keycard`.
 
 ## When to bend a rule

@@ -1,7 +1,8 @@
 ---
 name: loam-integrate-app
 description: >-
-  Integrate a React-Native app as a client of the Loam shared delivery node — consume
+  FIRST-TIME adoption (an app not yet on Loam; for an app already on Loam that needs a newer
+  loam-transport, use loam-update-app). Integrate a React-Native app as a client of the Loam shared delivery node — consume
   loam-transport, enable the device-wide shared node (so many apps share ONE Waku/Logos node
   instead of each running their own), get the approval prompt, and show shared-node status.
   Encodes the ordering + binding + approval gotchas that cost a full debugging session
