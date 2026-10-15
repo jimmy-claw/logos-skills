@@ -1,6 +1,6 @@
 ---
 name: logos-storage
-description: "Use Logos Storage (the Codex-derived storage_module / libstorage) for large or shared blobs in a local-first Logos app — attachments, media, log snapshots — without putting it on the capture path. Covers the model (content-addressed CIDs, DHT provider discovery, direct dials), the two-id rule (sealed-hash handle + CID sidecar), the storage_module API and its 2.x → 3.0 changes, the Basecamp 0.3 host-owned node, why NAT-ed users can't fetch from each other and the reachable-hub cache that fixes it, address/listen traps (extip, IPv6, mesh ULA), event-less completion polling, and the mobile reality (no Android module; a fetch-only client). Use when adding attachments or snapshots, or when 'upload works but nobody can fetch it' / 'stuck at fetching'."
+description: "Use Logos Storage (the Codex-derived storage_module / libstorage) for large or shared blobs in a local-first Logos app — attachments, media, log snapshots — without putting it on the capture path. Covers the model (content-addressed CIDs, DHT provider discovery, direct dials), the two-id rule (sealed-hash handle + CID sidecar), the storage_module API and its 2.x → 3.0 changes, the Basecamp 0.3 host-owned node, why NAT-ed users can't fetch from each other and the reachable-hub cache that fixes it, address/listen traps (extip, IPv6, mesh ULA), event-less completion polling, and the mobile reality (no Android module; a fetch-only client). Also covers relays (auto-discovered, capped), the download-swarm bug (manifest arrives, data never does; fixed in storage_module 3.0.3 / logos-storage-nim #1540), calls that block storage_module's queue, and storage_gateway (the same API, served by a node on a server through its REST API). Use when adding attachments or snapshots, or when 'upload works but nobody can fetch it' / 'stuck at fetching' / 'only the manifest came'."
 ---
 
 # Logos Storage for local-first apps
@@ -64,6 +64,15 @@ Rules that follow:
   and a hard timeout that ends in a clear error.[^api]
 - Don't call Storage from inside one of its own event callbacks (stop → `storageStop` → restart);
   defer to the loop (`logos-distributed-debugging`, Move 9).
+- **storage_module serves one call at a time, and `downloadToUrl`/`fetch` look the manifest up before
+  they return.** A CID nobody answers for therefore holds every later call (an upload, a
+  `manifests()` listing) until that lookup gives up: the app sees "did not answer (timeout)" on
+  unrelated calls. Ask for the manifest first with `downloadManifest` (returns at once; done in the
+  `storageDownloadManifestDone` event) and call `downloadToUrl` only once it is there. And don't put
+  an error over a listing that worked before because one refresh timed out: keep it and look again.[^queue]
+- **A dataset is listed (`manifests()`, `exists()`) as soon as its manifest arrives**, before (and
+  without) its data. Track what you are still fetching and show it as "arriving" / "only the
+  description came", never as a normal file.[^queue]
 
 ## Basecamp 0.3: the host owns the node
 
@@ -116,6 +125,52 @@ networking: it can dial out, nothing can dial in). It reaches the host at `169.2
 LAN address points back into the container there. Run logosctl's extracted AppImage inside
 (`--security-opt label=disable` for the bind mount on SELinux hosts).
 
+## Relays: auto-discovered, but capped (don't move files through them)
+
+As of libstorage v0.5.3 (2026-10-15, read from the source):[^relay]
+- **Clients find relays on their own.** When AutoNAT says a node isn't reachable (and no port mapping
+  works), its `AutoRelayService` reserves slots on up to `nat-max-relays` (default 2) relays. A relay
+  is any **already connected** peer that supports the circuit-relay v2 hop protocol. Nothing is
+  pre-configured, and there is no "use this relay" setting: to favour one, make it a bootstrap node
+  (or `connect()` to it) so it is among the connected peers.
+- **A relay is a node run with `--relay-server`** (needs `--nat=extip:<public IP>`). It uses
+  nim-libp2p's `Relay.new()` defaults, which are **not configurable from the CLI: 120 s and 128 KiB
+  per circuit**. Enough for a manifest, not for a file: this is why two NAT-ed machines often swap
+  manifests but no data. A relay on another host (say Akash, with unlimited traffic) changes nothing
+  unless the node is patched to raise those limits.
+- What works instead is a **reachable holder**: a node with a public address that holds the data
+  (both NAT-ed machines dial it directly: one uploads, the other downloads). See the hub below, or
+  storage_gateway, which uses such a node through its REST API.
+- Relayed links do try to upgrade to a direct one (DCUtR hole punching), which sometimes works.
+
+## The download swarm bug: "the manifest came, the data never did"
+
+Stock libstorage v0.5.x (every storage_module 3.0.0-3.0.2, and the v0.5.3 node) fills a download's
+swarm with up to 16 of the peers it is **connected** to, records a holder's "have" only if that
+holder is already in the swarm, and never drops silent members. A reachable holder that answers from
+outside the first 16 is ignored for good: `trace` on `blockexcengine` shows "Received block presence"
+then "No peer with range" in a loop. It hits at random (about half of fresh nodes on logos.test), even
+with the holder directly connected. **Fix: logos-storage-nim PR #1540** (open, as of 2026-10-15),
+carried as **storage_module 3.0.3** (`vpavlin/logos-storage-module` branch `pr1540-3.0.3`; Basecamp
+0.3.1 loads an installed 3.0.3 over its bundled 3.0.0, logosctl doesn't). Stock 0/5 vs 5/5 delivered
+in the same test.[^swarm] Download with `advertise=false` and `setAdvertise(cid, true)` only once the
+data is whole, so a failed download leaves no dead provider in the DHT.
+
+## A node on a server through its REST API: storage_gateway
+
+The standalone `logos-storage` node (release binaries, or `make` in logos-storage-nim) has a REST API
+(`--api-bindaddr`, `--api-port`; hidden from `--help` since 2026-09 but present). `storage_gateway`
+(`vpavlin/logos-storage-gateway`) is a Basecamp module with **storage_module's exact API** (methods,
+arguments, events) served by such a node: `init({"url": "http://[fd…]:8480"})`, then the usual calls,
+with files read from and written to this computer. An app can then offer both with one code path
+(`withStorage(n, [&](auto& sm){ … })`), e.g. Dufs and Reelcut.[^gateway] Notes:
+- **The REST API has no auth:** bind it to a VPN/mesh address only; make the p2p port public.
+- The node checks `Content-Type` against Nim's `std/mimetypes` and answers 422 for unknown ones
+  (`text/markdown`): upload again without a type.
+- Mix (`isPrivate`) isn't offered over REST.
+- A NAT-ed node fetching from the server: `connect(serverPeer, [its /ip4/…/tcp/…])` first helps, and the
+  server itself needs the #1540 fix to fetch FROM a NAT-ed node (with it: ~2 min for a small file).
+
 ## Address traps
 
 - **No `extip` = no announced address.** A node announces exactly its `nat=extip:<addr>`; without it
@@ -132,7 +187,8 @@ LAN address points back into the container there. Run logosctl's extracted AppIm
 
 ## Mobile
 
-There is no Android `storage_module` and libstorage has no HTTP API. A **fetch-only** Android client
+There is no Android `storage_module`, and libstorage (the library) has no HTTP API (the standalone
+node does: see storage_gateway above). A **fetch-only** Android client
 is feasible: libstorage cross-compiled to arm64 with the NDK, behind a JNI/RN bridge, downloading by
 CID from reachable providers (in practice, the hub). Uploading from phones stays out of scope; phones
 author events, desktops or hubs hold blobs. (Upstream tracking issue: logos-storage-nim#1221.)[^mobile]
@@ -156,3 +212,7 @@ the snapshot.[^snap]
 [^mobile]: Memories `logos-storage-module` (no Android target, no REST; fetch-only feasible), `storage-android-fetch-client` (arm64 cross-compile proven; per-dependency cross recipe).
 [^snap]: Memory `rln-readiness-plan` (loam-sync ADR 0020 snapshots, TS + C++ byte-identical serializer, hub writer → phone reader proven end-to-end 2026-09-25; the corrupted-link failure).
 [^hub09]: Swamp (`vpavlin/swamp3d` `swamp_core_impl.cpp` `hubSweep`/`hubPullStep`, 2026-10-09). The VPS hub with Storage debug logs: manifests only (`space` 1 block, local write 0 bytes) after trusting `exists()`; a file the hub uploaded itself downloaded on a fresh NAT-ed node in 4 s. NAT rig: a publisher container's 1.57 MB STL reached the hub in ~6 min; with the publisher stopped, a second container downloaded it byte-identical in 177 s. Real network: a home publisher behind NAT, VPS hub, fresh node downloaded with the publisher offline in 164 s.
+[^queue]: Dufs (`vpavlin/dufs-basecamp` PR #3, dufs_core 0.2.5-0.2.6, 2026-10-15): an "Add by CID" for an unanswered CID blocked an upload until the lookup ended; downloads now go `downloadManifest` first (`fetchFile` → `manifestDone` → `beginStorageDownload`); a failed `manifests()` refresh keeps the last good listing. Manifest-only datasets: the VPS node listed `test-privacy.jpg` while `GET /data/<cid>` returned 0 bytes; Dufs marks them (`StNode.incomplete`, persisted).
+[^relay]: logos-storage-nim v0.5.3 `storage/storage.nim` (`Relay.new()` when `--relay-server`, `AutoRelayService.new(maxNumRelays = natMaxRelays …)`), `storage/conf.nim` (`nat-max-relays` default 2; `--relay-server` requires extip), `storage/nat.nim` (autorelay started when not reachable without port mapping; `holePunchIfRelayed`); nim-libp2p `relay.nim` `DefaultLimitDuration = 120`, `DefaultLimitData = 1 shl 17`; `autorelayservice.nim` picks connected peers whose ProtoBook has `RelayV2HopCodec`.
+[^swarm]: atlas/whisperbox's analysis and test (`ActiveDownload.updatePeerAvailability` discards a failed `swarm.addPeer`; `DefaultDeltaMax = 16`), posted on logos-storage-nim#1540 (comment 6187343523, 2026-10-15). Confirmed here: a stock v0.5.3 VPS node ignored a NAT-ed holder it was directly connected to ("Want-have send timed out"); the same node built from d82d0d39 fetched it in ~2 min.
+[^gateway]: `vpavlin/logos-storage-gateway` 0.1.1 (module `storage_gateway`, cpp-httplib, worker threads emit the events); VPS node `storage-gateway-node.service` (REST on the mesh only, p2p public, `--autonat-server --relay-server`). Dufs core 0.2.x (two nodes at once: this computer's + one elsewhere; copy between them through this computer) and Reelcut core 0.1.8 (reels + `reels-<job>.json` to Storage) use it.
