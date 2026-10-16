@@ -47,32 +47,34 @@ Four layers per program, usually under `programs/<name>/`:
 
 ## Green tests are not evidence — run it on a real local chain
 
-The unit and integration suites build accounts by hand, so they agree with themselves, not with what
-the other real programs produce. In one review ~950 passing tests (dev mode, zkVM integration suite
-included) missed every critical bug that a 30-minute run against a real sequencer found.
-- **Red flags in fixtures** (grep for them): accounts given a fake owner so they pass ownership
-  checks (`program_owner: [7u32; 8]`, often with a comment that "LEZ rejects" the real shape); another
-  program's account (an oracle price, a token holding) written by hand in the consumer's tests
-  instead of produced by that program. Each one is a contract nobody tested end to end.
+Unit and integration suites build accounts by hand, so they agree with themselves, not with what the
+other real programs produce. Treat a passing suite as necessary, not sufficient, and get on-chain
+evidence for anything that crosses a program boundary.
+- **Fixture red flags** to grep for:
+  - an account given a placeholder owner just so it passes an ownership check (often with a
+    comment that the runtime would reject the real shape);
+  - another program's account (a price, a holding, a config) written by hand in the consumer's
+    tests instead of produced by that program.
+
+  Each one is a contract nobody tested end to end.
 - **Local chain recipe** *(as of 2026-10-16, LEZ v0.2.4)*:
   1. build LEZ at the pinned tag: `cargo build --release --features standalone -p sequencer_service`
      (no Bedrock) and `cargo build --release -p wallet`;
   2. run it with `RISC0_DEV_MODE=1`, its `home` pointed at a scratch dir;
   3. import a funded debug key into a scratch wallet (`LEE_WALLET_HOME_DIR`);
-  4. `wallet deploy-program` each `target/guest/*.bin` from the repo's own Docker build, and
-     compare the ImageIDs with the repo's recorded deployments (a mismatch means source drift since
-     that deploy);
+  4. `wallet deploy-program` each guest binary from the repo's own release build, and compare the
+     ImageIDs with any recorded deployments (a mismatch means source drift since that deploy);
   5. drive every instruction through the `spel` CLI, the same way a user would.
-- **Log state after every action**: reserves, vaults, oracle accounts, user balances. Take the
-  snapshot **one block after** the CLI reports "confirmed" (see the observability notes below), and
-  append it to a JSONL log. The timeline is what turns "it's manipulable" into a table the author
-  can't argue with.
-- **Bootstrap from zero, in dependency order.** Initialise the system the way a real deployment
-  would. One stablecoin's `initialize_program` required an existing oracle price account quoting a
-  token that `initialize_program` itself creates. No pool-backed TWAP can satisfy that, so the
-  launch needs a person-fed feed, which nothing in the docs said.
-- **Check the released tooling can call every instruction.** A released `spel` could not encode
-  `i128` arguments, so no released CLI could initialise the program at all.
+- **Log state after every action** (balances, reserves, any oracle/config accounts), read one block
+  after the CLI reports "confirmed" (see the observability traps below), and append it to a JSONL
+  log. A per-action timeline is the evidence a finding needs.
+- **Bootstrap from zero, in dependency order.** Initialise the system exactly as a real deployment
+  would. Check for circular requirements, e.g. an initialiser that needs an account which only that
+  initialiser can create. They often mean launch depends on a manual or trusted step that the docs
+  don't mention.
+- **Check the released tooling can call every instruction.** Encode each argument type through the
+  released CLI (signed integers, options, structs). *(As of 2026-10-16, `spel` CLI v0.7.0 could not
+  encode `i128` arguments; `spel-client-gen` could.)*
 
 ## IDL — verify it matches the source, don't just check it exists
 
@@ -103,24 +105,24 @@ and diff against what's committed rather than trusting that it was.
   expects — this is the same class of fragility as a Basecamp module's positional-argument limit,
   just enforced by convention instead of a generated contract.
 
-- **Use every signer role twice** *(as of 2026-10-16, SPEL ≤ v0.7 on LEZ v0.2.4)*. A program
-  that checks `account.is_authorized` by hand instead of declaring `#[account(signer)]` never gets
-  that account claimed. After its first transaction the account is default-owned with nonce > 0;
-  SPEL's generated `main` then drops it from the output, and LEZ rejects the transaction with
-  `DeclaredAccountMissingFromOutput` (the reason is only in the sequencer log). Effects seen:
-  - an admin that gets exactly one action (init) and can never rotate, re-parameterise or freeze;
-  - a position owner who can open a position and do nothing else, so the collateral is locked
-    forever (the account can't be repaired afterwards: `auth-transfer init` refuses a used account);
-  - a person-fed oracle source limited to one call.
-
-  Test each role (admin, owner, authority, price source) with a **second** transaction from the same
-  account, and confirm a user can always get funds back out. The workaround is
-  `wallet auth-transfer init` on an account **before** its first use.
-- **Units and scale across a program boundary.** When one program reads another's account (a
-  consumer reading an oracle's `price`, a vault reading a token amount), find where each side
-  defines the unit and compare. A TWAP that wrote Q64.64 (1.0 = 2^64) and a stablecoin that read
-  the same field as RAY (1.0 = 1e27) made a real 0.5 read as ~9e-9. The controller saturated, and
-  the redemption price went ×183,000 in 20 minutes. The struct had no scale field; ask for one.
+- **Use every signer role twice** *(as of 2026-10-16, LEZ ≤ v0.2.4 / SPEL ≤ v0.7.x; v0.2.5 removed
+  `Claim`)*.
+  - **The trap:** a program that checks `account.is_authorized` by hand, instead of declaring the
+    parameter `#[account(signer)]`, never gets that account claimed. After its first transaction the
+    account is default-owned with a non-zero nonce. SPEL's generated `main` then filters it out of the
+    output, and LEZ rejects the transaction with `DeclaredAccountMissingFromOutput`.
+  - **Effects:** an admin limited to one action, an owner who can open something but never close it
+    or withdraw (funds stuck), a signing source that can publish once.
+  - **The fix:** declare `#[account(signer)]` (SPEL claims the account while it is still default).
+  - **How to test:** run each role (admin, owner, authority, signing source) through a **second**
+    transaction from the same account, and confirm a user can always get funds back out.
+  - **User-side workaround:** `wallet auth-transfer init` an account before its first use. It can't
+    repair an account that has already been used.
+- **Units and scale across a program boundary.** When one program reads another's account (a consumer
+  reading a price, a vault reading an amount), find where each side defines the unit and compare. Two
+  fixed-point formats (e.g. Q64.64 vs a 1e27 "RAY") on either side of the same field don't fail
+  loudly. They produce a plausible-looking value that's wrong by orders of magnitude. If the shared
+  struct carries no scale or decimals field, ask for one.
 
 ## Math-heavy programs (AMM, stablecoin, anything with a formula)
 
@@ -134,38 +136,39 @@ Specifically check, by reading the code (not just running the happy-path test):
 - **Oracle/TWAP seeding**: whether a freshly-initialized price account can be manipulated before it
   has enough observations to be meaningful.
 
-### TWAP / oracle checks (each one was a real finding)
-- **The accumulator must credit the price that held *before* each change.** `cumulative += tick_now ×
-  (now − last_record)` credits whatever the tick is *at recording time* for the whole gap. One swap
-  followed by a self-timed record credited a one-block price for 10.9 minutes, longer than the whole
-  window. The current-tick account's own `last_updated` was the fix, unused.
-- **The clamp anchor must stay clamped.** Clamping the credited tick to ±`MAX_TICK_DELTA` while
-  setting `last_recorded_tick` to the *unclamped* tick protects exactly one observation: record
-  twice and the clamp is gone. It also slows the honest recovery.
-- **Who can trigger a recording or a publish?** If it's anyone, the attacker picks the sampling
-  times. Check this together with the two items above.
-- **Does "window" mean the window?** Check what the average actually spans. One `publish_price`
-  averaged from the oldest buffered entry, so a "10-minute TWAP" covered all history before the
-  buffer filled, and 2048 × the record cadence after.
-- **Is the timestamp the data's age or the publish time?** If publishing stamps `now`, any caller
-  can refresh a consumer's `maxAge` check over stale or attacker-shaped data.
-- **Liquidity awareness.** Drain the pool to the locked minimum and swap dust: a 1e6-unit swap moved
-  the current tick to −131,245, and the TWAP followed.
-- **Probe:** reconstruct what each observation credited from the account itself:
-  `(cum[i] − cum[i−1]) / (ts[i] − ts[i−1])`, next to what spot actually was in that interval. That
-  table is the finding.
-- Check the spec's oracle requirements literally: keeper-free recording, cardinality, a read-only
-  query with `maxAge`, feed registration. The code's own design can be internally consistent and
-  still miss every hard requirement.
+### TWAP / oracle checks
+- **Accumulate the price that held *before* each change.** An accumulator that credits the price
+  *at recording time* for the whole interval since the previous record lets anyone move the price,
+  trigger a record, and unwind. The manipulated price then counts for the entire interval, which can
+  be longer than the window itself. A "last updated" timestamp kept next to the live price is what
+  the integration needs.
+- **Keep any manipulation clamp anchored on the clamped value.** If the stored anchor is reset to the
+  unclamped price after each record, the clamp protects exactly one observation: record twice and
+  it's gone. It also slows honest recovery.
+- **Who can trigger a record or a publish?** If anyone can, the attacker chooses the sampling times;
+  assess the two items above with that in mind.
+- **Does the "window" actually bound the average?** Check what span it really covers (since creation?
+  the whole buffer at whatever cadence people record?) versus what its name promises.
+- **Is the published timestamp the data's age, or the publish time?** If publishing stamps `now`, any
+  caller can refresh a consumer's staleness check over stale or shaped data.
+- **Liquidity awareness.** Drain the source pool to its minimum and trade dust: if the feed follows,
+  it has no depth guard.
+- **Probe:** reconstruct what each observation credited from the account itself,
+  `(cum[i] − cum[i−1]) / (ts[i] − ts[i−1])`, and set it beside what the price actually was in that
+  interval.
+- Check the spec's oracle requirements literally (keeper-free recording, cardinality, a read-only query
+  with a max age, feed registration). A design can be internally consistent and still miss every hard
+  requirement.
 
 ## Observability traps on LEZ v0.2.4 *(as of 2026-10-16)*
-- **A rejected transaction leaves no receipt.** The CLI waits ~15 blocks and prints "Transaction
-  not found". The real reason (guest panic text, `DeclaredAccountMissingFromOutput`,
-  `OutOfValidityWindow`) is only in the sequencer's log, so keep that log and grep it for the tx hash.
-- **Unsigned calls collide.** Identical permissionless calls (no signer, so no nonce) are identical
-  bytes and share one tx hash, yet each executes. Confirmation-by-hash can match an older one; don't
-  trust "confirmed" as "my call landed", read the state.
-- **Read state one block later.** The RPC can serve the pre-state right after "confirmed".
+- **A rejected transaction leaves no receipt.** The CLI polls up to the wallet's
+  `seq_tx_poll_max_blocks` and then prints "Transaction not found". The real reason (guest panic
+  text, `DeclaredAccountMissingFromOutput`, `OutOfValidityWindow`) is only in the sequencer's own
+  log, so keep that log and grep it for the tx hash.
+- **Unsigned calls collide.** A call with no signers has an empty nonce list, so identical calls are
+  identical bytes with one tx hash, yet each executes. Confirmation-by-hash can match an earlier one:
+  read the state instead of trusting "confirmed".
+- **Read state one block later.** The RPC can still serve the pre-state right after "confirmed".
 
 ## Compute budget
 
@@ -204,7 +207,3 @@ PDA/authorization/ChainedCall and math-review guidance is general smart-contract
 applied to this architecture, not drawn from a specific documented incident the way the Basecamp
 skills' footnoted traps are — treat it as a starting checklist to verify against the actual program
 under review, not a list of confirmed historical bugs.
-
-The "real local chain", signer-role, units-across-programs, TWAP and observability sections are
-different: each item is a finding reproduced on chain in a review of a LEZ AMM / TWAP oracle /
-stablecoin workspace against a local LEZ v0.2.4 sequencer (2026-10-15/16), with per-action state logs.
