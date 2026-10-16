@@ -40,6 +40,39 @@ Goal: a review the author can act on. Every finding is reproduced or clearly mar
 - **If the Basecamp AppImage won't run at all on your host** (e.g. `GLIBC_2.38 not found` or a missing `GLIBCXX`/`CXXABI` symbol), the host's system glibc is older than what the AppImage was built against. Don't downgrade your approach to static analysis over this — fetch a newer glibc's `.deb`s (`apt-get download libc6 libstdc++6` from a newer release, or their `.debs` from a repo mirror) into a scratch dir, extract with `dpkg-deb -x` (do not install system-wide), then invoke the AppImage's actual `.elf` binary directly through that newer `ld-linux-x86-64.so.2 --library-path <extracted>/lib/x86_64-linux-gnu ... <elf>`, bypassing the kernel's normal PT_INTERP loading. Any child processes the app spawns (a `logos_host`/`ui-host` helper) need the same treatment — wrap them in a small script at the exact path the error message names, each invoking the real `.elf` through the same interpreter. This setup is reusable across a whole review session once built.
 - Walk the real user journey: first run, empty states, the happy path, then the unhappy paths (bad input, busy device, offline, wrong network). Screenshot every step; record the flows that matter. Look at screenshots yourself before claiming anything about them (misread buttons are easy).
 - Install packages without clicking: `lgpm --modules-dir <HOME>/.local/share/Logos/LogosBasecamp/modules --ui-plugins-dir <HOME>/.local/share/Logos/LogosBasecamp/plugins --allow-unsigned install --file X.lgx` before first start (still test the GUI install flow if the app's install is what is under review).
+- **Install exactly as the app's README says first**, before any path you know works. Following
+  one DEX app's README built its wallet dependency at a revision that installs as
+  `logos_execution_zone`, while both the app and its core module depend on `lez_core`. Result:
+  "Failed to load core dependencies". Only the revision pinned in the flake worked. A README that
+  doesn't produce a working install is a finding.
+- **Test the real Basecamp, not the standalone host.** `nix run .#<ui>` runs `logos-standalone-app`,
+  which has the QML inspector for scripted UI tests but not Basecamp's sandbox (file/network limits,
+  shared module instances). Passing there doesn't prove it works in Basecamp. Basecamp has no
+  inspector, so drive it with `xdotool` on Xvfb.
+  - Before launching, list the Basecamp instances already running and leave the user's alone.
+  - Confirm `--user-dir` took effect: the log prints `Base data directory: <dir>`. Basecamp
+    is single-instance per user dir; a second launch hands over to the running one.
+- **"Submitted" is not "succeeded".** Check every UI action against chain or server state
+  (`spel inspect`, an API read), not the UI's own message. Then force a failure the UI can't
+  prevent and watch what the user is told. A front-run does it for a swap: quote, then move the pool
+  from the CLI, then confirm. In one review, a swap the chain rejected (the slippage guard working)
+  got the same green "Swap submitted" toast as a successful one, and never an error.
+- **Toasts are transient; get them from the recording.** Screenshots taken a few seconds apart
+  routinely miss them.
+  1. Record the recording's start time (`ps -o lstart= -p <ffmpeg pid>`; parse it with `LC_ALL=C`,
+     because a localised date breaks `date -d`).
+  2. Log the time of each action.
+  3. Pull frames around it, e.g. `ffmpeg -nostdin -ss <offset> -t 14 -i rec.mkv -vf fps=2 f%02d.png`,
+     then a `tile=7x4` contact sheet to find the frame, then crop it full-resolution.
+- **Data-truth checks for anything with numbers:**
+  - Are declared token decimals honoured, or does the user type base units?
+  - Do balances refresh after each transaction, or stay at the launch-time value?
+  - Do the fee shown and the fee charged match? Compare with the on-chain delta.
+  - Do two screens showing the same value agree?
+  - Does number formatting stay consistent under the user's locale? An AppImage inherits it, and
+    one screen mixed `0.68` with `0,01%`.
+  - Do defaults hurt the user? Pool creation that defaults to the minimum deposit locked 99.9% of
+    it as permanent minimum liquidity, with no warning.
 - `$!` after `cd x && prog &` is the subshell's PID, not the program's; record the real PID (`pgrep -x`, or start with `setsid prog &` on its own line) or `kill` will silently miss it.
 - Coordinates move when panels appear (preview pane, transfer bar): re-take a screenshot before clicking a button whose position depends on state.
 - Expect hypotheses to fail: test them (e.g. "scroll resets on each poll") and report the ones that turn out fine under "What works".
@@ -48,11 +81,23 @@ Goal: a review the author can act on. Every finding is reproduced or clearly mar
 - Use fakes for hardware/services (mock printer, local sequencer) and say so in the report.
 - Verifying a submitted demo video: download the actual file (not just the title/thumbnail/description), then extract stills at specific timestamps (`ffmpeg -ss TIMESTAMP -i INPUT -frames:v 1 -q:v 3 OUT.jpg`) and check what's actually on screen against the claims, rather than trusting the title. Burned-in captions are a reliable proxy for narration content if present; without them, you have visual confirmation of what's on screen but not of the spoken narration — say that plainly in the report rather than implying you "watched" the video.
 - Process hygiene: start things with a recorded PID/PGID and stop them by exact PID or by an env marker in a `stop.sh`. NEVER `pkill -f <pattern>` (it kills your own shell). Verify nothing is left running at the end.
+  - `pgrep -f <pattern> | xargs kill` fails the same way. So does `pkill -f "[L]ogosBasecamp"` when
+    the same command line also contains the full path: the agent killed its own shell three times
+    this way, and once the user's own Basecamp. Before killing, read `/proc/<pid>/cmdline` and check
+    it contains your marker (your `--user-dir`, your display).
+  - Long-lived infrastructure (sequencer, daemon, Xvfb) outlives a single tool call. Start it
+    detached (`setsid nohup … & echo $! > x.pid`). Agent background jobs are cut off after a time
+    limit (~2 h), and something outside the session can still `SIGTERM` it. Health-check it (an RPC
+    call) before each phase and restart on the same state rather than assuming it's up.
+  - In scripts, run `ffmpeg -nostdin`, or it reads stdin and stalls on "Enter command". Never name a
+    shell function after a coreutils command (`cut`, `sort`): the function then calls itself and
+    writes junk files.
 
 ## 4. Triage
 - Severity: High (security/funds/data loss or broken core flow), Medium, Low, UX, Good (call out what works well).
 - Withdraw findings that don't hold up; double-check counts, line numbers and wording before publishing.
 - Separate "reproduced", "by inspection only", and "not tested" (real hardware, multi-user sync, other versions).
+- When the project is a DeFi/LEZ app, the UI and the chain fail together: a chain-level rejection the UI reports as success is High even if the chain behaved correctly.
 
 ## 5. Report
 - One static `index.html` + `media/` + `probes/`, same layout every time: summary table with severities, per-finding card (what, where, repro, impact, suggested fix), screenshots/videos inline, "not tested" section, how to re-run.
